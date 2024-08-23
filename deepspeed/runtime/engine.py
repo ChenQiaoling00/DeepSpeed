@@ -717,6 +717,9 @@ class DeepSpeedEngine(Module):
     def mics_shard_size(self):
         return self._config.mics_shard_size
 
+    def amsp_o_shard_size(self):
+        return self._config.amsp_o_shard_size
+
     def zero_reduce_bucket_size(self):
         return self._config.zero_config.reduce_bucket_size
 
@@ -1480,6 +1483,9 @@ class DeepSpeedEngine(Module):
         zero_stage = self.zero_optimization_stage()
 
         mics_shard_size = self.mics_shard_size()
+
+        amsp_o_shard_size=self.amsp_o_shard_size()
+
         model_dtype, gradient_accumulation_dtype = self.get_data_types()
 
         timers = self.timers if self.wall_clock_breakdown() else NoopTimer()
@@ -1499,6 +1505,8 @@ class DeepSpeedEngine(Module):
             assert not isinstance(optimizer, DummyOptim), "zero stage {} requires an optimizer".format(zero_stage)
 
             log_dist(f'Creating {model_dtype} ZeRO stage {zero_stage} optimizer', ranks=[0])
+            if amsp_o_shard_size > 1:
+                return self._return_amsp_o_shard_optimizer(optimizer,timers,ZeroStageEnum.gradients)
 
             if isinstance(self.module, PipelineModule):
                 if overlap_comm:
@@ -1609,6 +1617,43 @@ class DeepSpeedEngine(Module):
         else:
             raise NotImplementedError("ZeRO stage {} not implemented".format(zero_stage))
 
+        return optimizer
+
+
+    def _return_amsp_o_shard_optimizer(self,basic_optimizer,timers,zg):
+        from deepspeed.runtime.zero.amsp import AMSP_O_Optimizer
+        model_dtype, gradient_accumulation_dtype = self.get_data_types()
+        optimizer=AMSP_O_Optimizer(
+                basic_optimizer,
+                self.param_names,
+                timers=timers,
+                ds_config=self.config,
+                static_loss_scale=self.loss_scale(),
+                dynamic_loss_scale=self.dynamic_loss_scale(),
+                dynamic_loss_args=self.dynamic_loss_scale_args(),
+                clip_grad=self.gradient_clipping(),
+                contiguous_gradients=self.zero_contiguous_gradients(),
+                reduce_bucket_size=self.zero_reduce_bucket_size(),
+                use_multi_rank_bucket_allreduce=self.zero_multi_rank_bucket_allreduce(),
+                allgather_bucket_size=self.zero_allgather_bucket_size(),
+                dp_process_group=self.seq_data_parallel_group,
+                expert_parallel_group=self.expert_parallel_group if self.has_moe_layers else None,
+                expert_data_parallel_group=self.expert_data_parallel_group if self.has_moe_layers else None,
+                reduce_scatter=self.zero_reduce_scatter(),
+                overlap_comm=self.zero_overlap_comm(),
+                offload_optimizer_config=self.zero_offload_optimizer(),
+                mpu=self.mpu,
+                postscale_gradients=self.postscale_gradients(),
+                gradient_predivide_factor=self.gradient_predivide_factor(),
+                gradient_accumulation_steps=self.gradient_accumulation_steps(),
+                ignore_unused_parameters=self.zero_ignore_unused_parameters(),
+                partition_grads=self.zero_optimization_stage() == zg,
+                round_robin_gradients=self.zero_round_robin_gradients(),
+                has_moe_layers=self.has_moe_layers,
+                fp16_master_weights_and_gradients=self.fp16_master_weights_and_gradients(),
+                gradient_accumulation_dtype=gradient_accumulation_dtype,
+                communication_data_type=self.communication_data_type,
+                elastic_checkpoint=self.zero_elastic_checkpoint())
         return optimizer
 
     def _return_mics_optimizer(self, basic_optimizer, timers):

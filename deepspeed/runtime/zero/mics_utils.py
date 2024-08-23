@@ -41,12 +41,34 @@ class MiCS_CommGroups:
     param_repli_size = -1
     param_repli_rank = -1
 
+    optimizer_shard_group = None
+    optimizer_shard_size = -1
+    optimizer_shard_rank = -1
+
+    optimizer_repli_group = None
+    optimizer_repli_size = -1
+    optimizer_repli_rank = -1
+
+    optimizer_to_param_shard_group=None
+    optimizer_to_param_shard_size=-1
+    optimizer_to_param_shard_rank=-1
+
+    optimizer_to_param_repli_group=None
+    optimizer_to_param_repli_size=-1
+    optimizer_to_param_repli_rank=-1
+
+    zero_group=None
+    zero_shard_size=-1 # means optimizer_shard_size//param_shard_size 
+
+    p_os_map_group = None
+
     param_intra_node_group = None
     param_inter_node_shard_group = None
 
 
 def create_mics_comm_groups(
-    shard_size,
+    p_shard_size,
+    os_shard_size,
     dp_group,
     hierarchical_allgather=False,
     mpu=None,
@@ -71,9 +93,22 @@ def create_mics_comm_groups(
     # global rank
     global_rank = dist.get_rank()
 
-    config = _generate_mics_config(world_size, ndevices_per_node, shard_size, 1)
-    ranks_of_shard_group = config['shard_groups']
-    ranks_of_repli_group = config['replicate_groups']
+    config = _generate_mics_config(world_size, ndevices_per_node, p_shard_size,os_shard_size, 1)
+    ranks_of_shard_group = config['p_shard_groups']
+    ranks_of_repli_group = config['p_replicate_groups']
+  
+    p_os_map_group=config['p_os_map_group']
+    ranks_of_zero_shard_group=config['os_replic_group']
+    ranks_of_zero_shard_group = [sublist2 for sublist1 in ranks_of_zero_shard_group for sublist2 in sublist1]
+
+
+    for shard_ranks in ranks_of_zero_shard_group:
+        _group = dist.new_group(shard_ranks)
+        if global_rank in shard_ranks:
+            groups.zero_group = _group
+ 
+    groups.p_os_map_group=p_os_map_group
+
     if len(ranks_of_repli_group) == 0:
         assert len(ranks_of_shard_group) == 1, "replicate groups are empty only for single shard group"
         for r in ranks_of_shard_group[0]:
@@ -91,6 +126,7 @@ def create_mics_comm_groups(
     global_rank = dist.get_rank()
     # create shard groups
     for shard_ranks in ranks_of_shard_group:
+
         _group = dist.new_group(shard_ranks)
         if global_rank in shard_ranks:
             groups.param_shard_group = _group
@@ -117,6 +153,9 @@ def create_mics_comm_groups(
 
     # assign shard group size as world size
     assert groups.param_shard_size == len(ranks_of_shard_group[0])
+    groups.optimizer_shard_size=os_shard_size
+    groups.optimizer_repli_size=world_size//os_shard_size
+
 
     if hierarchical_allgather:
         # create hierarchy inter-node, intra-node groups
@@ -160,14 +199,14 @@ def create_mics_comm_groups(
     return groups
 
 
-def _generate_mics_config(world_size, ndev_per_node, shard_size, pp_size=1):
+def _generate_mics_config(world_size, ndev_per_node, p_shard_size, os_shard_size,pp_size=1):
     """Generating the configuration for sharding This shard config generation assume
     that the pipeline stages are partitioned in order, i.e., first ranks
     hold the stage0, etc.
 
     Args:
 
-        shard_size (int): zero3 data-parallel shard size, FIXME:
+        p_shard_size (int): zero3 data-parallel shard size, FIXME:
         change the name later
 
         pp_size (int): pipeline parallel size, currently, only work with
@@ -175,22 +214,49 @@ def _generate_mics_config(world_size, ndev_per_node, shard_size, pp_size=1):
 
     """
     assert world_size % pp_size == 0
-    assert (world_size // pp_size) % shard_size == 0, \
+
+    assert (world_size // pp_size) % p_shard_size == 0, \
         f"dp group size is not dividable by dp_shard_size, "\
-        f" (world_size {world_size}, pp_size {pp_size}, dp_shard_size {shard_size})"
+        f" (world_size {world_size}, pp_size {pp_size}, dp_shard_size {p_shard_size})"
 
     config = {}
-    shard_groups = np.arange(world_size).reshape(-1, shard_size)
-    replicate_groups = []
-    for i in range(shard_size):
-        same_shard_ranks = shard_groups[:, i].tolist()
+    zero_shard_size=os_shard_size//p_shard_size
+    os_repli_size=world_size//os_shard_size
+
+    p_shard_groups = np.arange(world_size).reshape(-1, p_shard_size)
+    os_shard_groups=p_shard_groups.reshape(-1,os_shard_size)
+
+    p_os_map_group = [[0 for _ in range(zero_shard_size)] for _ in range(os_repli_size)]
+
+    if zero_shard_size >1:
+        for i in range(os_repli_size):
+            for j in range(zero_shard_size):
+            # print(f"i,{i},j:{j},index:{i*os_repli_size+j},value:{p_shard_group[i*os_repli_size+j]}")
+                p_os_map_group[i][j]=p_shard_groups[i*os_repli_size+j].tolist()
+
+    os_replic_group=[[[0 for _ in range(zero_shard_size)] for _ in range(p_shard_size)] for _ in range(os_repli_size)]
+    if zero_shard_size > 1:
+        for i in range(os_repli_size):
+            for j in range(p_shard_size):
+                tmp=(os_shard_groups[i][j],os_shard_groups[i][j+p_shard_size])
+                os_replic_group[i][j]=list(tmp)
+
+
+    p_replicate_groups = []
+    for i in range(p_shard_size):
+        same_shard_ranks = p_shard_groups[:, i].tolist()
         n_ranks = len(same_shard_ranks)
         replicate_size = n_ranks // pp_size
-        replicate_groups.extend([same_shard_ranks[j:j + replicate_size] for j in range(0, n_ranks, replicate_size)])
+        p_replicate_groups.extend([same_shard_ranks[j:j + replicate_size] for j in range(0, n_ranks, replicate_size)])
 
-    config['replicate_groups'] = replicate_groups
-    config['shard_groups'] = shard_groups.tolist()
-    config["span_nodes"] = len(shard_groups[0]) // ndev_per_node
+    config['p_replicate_groups'] = p_replicate_groups
+    config['p_shard_groups'] = p_shard_groups.tolist()
+    config['os_shard_groups']=os_shard_groups.tolist()
+    config['p_os_map_group']=p_os_map_group
+
+    config['os_replic_group']=os_replic_group
+    
+    config["span_nodes"] = len(p_shard_groups[0]) // ndev_per_node
     return config
 
 

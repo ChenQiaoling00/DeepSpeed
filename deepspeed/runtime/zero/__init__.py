@@ -13,3 +13,5 @@ from .tiling import TiledLinear
 from .tiling import TiledLinearReturnBias
 
 from .mics import MiCS_Init
+
+from .amsp import AMSP_Init
