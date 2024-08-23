@@ -311,7 +311,6 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
                     param.grad_accum = None
                     trainable_parameters.append(param)
             self.bit16_groups.append(trainable_parameters)
-
             # not sure why apex was cloning the weights before flattening
             # removing cloning here
 
@@ -838,8 +837,8 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
 
             param_size = param.numel()
             param_id = self.get_param_id(param)
-
             if start_index <= current_index < end_index:
+                
                 set_key_value_list(self.param_to_partition_ids[i], param_id, partition_id)
                 increment_value(self.total_grads_in_partition[i], partition_id)
 

@@ -962,10 +962,20 @@ def all_gather_into_tensor_dp_groups(groups_flat, partitioned_param_groups, dp_p
         dist.all_gather_into_tensor(group_flat, partitioned_params[partition_id], dp_process_group[group_id])
 
 
+def all_gather_into_tensor_zero_groups(groups_flat, partitioned_param_groups, zero_process_group):
+    for group_id, (group_flat, partitioned_params) in enumerate(zip(groups_flat, partitioned_param_groups)):
+        partition_id = dist.get_rank(group=zero_process_group)
+        dp_world_size = dist.get_world_size(group=zero_process_group)
+        if dp_world_size == 1:
+            # no groups share optimizer states
+            # pipeline parallel with bf16 will default call this even if dp size = 1.
+            continue
+        dist.all_gather_into_tensor(group_flat, partitioned_params, zero_process_group)
+
 def all_gather_dp_groups(groups_flat, partitioned_param_groups, dp_process_group, start_alignment_factor,
                          allgather_bucket_size):
-    if dist.has_all_gather_into_tensor():
-        return all_gather_into_tensor_dp_groups(groups_flat, partitioned_param_groups, dp_process_group)
+    # if dist.has_all_gather_into_tensor():
+    #     return all_gather_into_tensor_dp_groups(groups_flat, partitioned_param_groups, dp_process_group)
 
     for group_id, partitioned_params in enumerate(partitioned_param_groups):
         # Sequential AllGather Best of both worlds

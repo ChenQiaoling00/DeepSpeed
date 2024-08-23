@@ -22,7 +22,6 @@ from deepspeed.accelerator import get_accelerator
 from torch import Tensor
 from torch.nn import Parameter
 
-
 def has_hierarchical_all_gather_groups(comm_groups: MiCS_CommGroups):
     result = False
     if comm_groups.param_intra_node_group is not None and comm_groups.param_inter_node_shard_group is not None:
@@ -162,6 +161,7 @@ class MiCS_Init(Init):
 
         self.mics_comm_groups = create_mics_comm_groups(
             _ds_config.mics_shard_size,
+            _ds_config.amsp_o_shard_size,
             ds_process_group,
             hierarchical_allgather=_ds_config.mics_hierarchial_params_gather,
             mpu=mpu)
@@ -393,6 +393,18 @@ class MiCS_Optimizer(DeepSpeedZeroOptimizer_Stage3):
                  aio_config=None):
 
         log_dist("Init MiCS optimizer", ranks=[0])
+
+        first_param = next(module.parameters())        
+        # overload the dp_process_group and partition_count
+        assert hasattr(first_param, "comm"), " ".join([
+            "Sharded parameters don't have the MiCS_CommGroups attached.",
+            "Might due to the use of deepspeed.zero.Init context for initializing the weights.",
+            "To use MiCS sharding, please use deepspeed.zero.MiCS_Init instead for initializing parameter."
+        ])
+
+
+        self.mics_comm_groups=first_param.comm
+
         super().__init__(module, init_optimizer, timers, ds_config, static_loss_scale, dynamic_loss_scale,
                          dynamic_loss_args, verbose, contiguous_gradients, reduce_bucket_size, prefetch_bucket_size,
                          max_reuse_distance, max_live_parameters, param_persistence_threshold,
@@ -400,16 +412,10 @@ class MiCS_Optimizer(DeepSpeedZeroOptimizer_Stage3):
                          offload_optimizer_config, offload_param_config, sub_group_size, offload_ratio, mpu, clip_grad,
                          gradient_accumulation_dtype, communication_data_type, postscale_gradients,
                          gradient_predivide_factor, gradient_accumulation_steps, elastic_checkpoint, aio_config)
-        first_param = next(module.parameters())
-        # overload the dp_process_group and partition_count
-        assert hasattr(first_param, "comm"), " ".join([
-            "Sharded parameters don't have the MiCS_CommGroups attached.",
-            "Might due to the use of deepspeed.zero.Init context for initializing the weights.",
-            "To use MiCS sharding, please use deepspeed.zero.MiCS_Init instead for initializing parameter."
-        ])
+        
+        
         self.dp_process_group = first_param.comm.param_shard_group
         self.partition_count = first_param.comm.param_shard_size
-
     def initialize_ds_offload(
         self,
         *args,

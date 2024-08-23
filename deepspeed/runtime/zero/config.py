@@ -294,6 +294,12 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
 
     mics_hierarchical_params_gather: bool = False
 
+    amsp_p_shard_size: int = Field(-1, new_param="amsp_p_shard_size")
+
+    amsp_g_shard_size: int = Field(-1, new_param="amsp_g_shard_size")
+
+    amsp_o_shard_size: int = Field(-1, new_param="amsp_o_shard_size")
+
     memory_efficient_linear: bool = True
     """
     Use memory efficient linear implementation, for Stage 3.
