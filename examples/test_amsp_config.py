@@ -42,7 +42,7 @@ class DummyProfile:
 
 
 model_args={
-    "block_size": 4096, # hidden dim
+    "block_size": 4096,
     "vocab_size": 50304,
     "n_layer": 32,
     "n_head": 32,
@@ -60,16 +60,10 @@ def create_config_from_dict(tmpdir, config_dict):
 
 
 def get_data_loader(vocab_size):
-    batch_size = 4
-    sequence_length = 128
-
-    # device=torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
+    batch_size = 32
+    sequence_length = 1024
     input_ids = torch.randint(0,vocab_size, (10000, sequence_length))
-
     targets = input_ids.clone()
-
-    # 创建数据加载器
     dataset = TensorDataset(input_ids, targets)
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return data_loader
@@ -79,18 +73,16 @@ def get_args(tmpdir, config_dict):
     parser = argparse.ArgumentParser()
     parser.add_argument('--zero', type=int, default=3)
     parser.add_argument('--local_rank', type=int)
-    parser.add_argument('--os', type=int, default=4)
+    parser.add_argument('--os_shard_size', type=int, default=4)
 
-    parser.add_argument('--mics_shard_size', default=4, type=int)
+    parser.add_argument('--p_shard_size', default=4, type=int)
     parser.add_argument('--mics_hierarchical_params_gather', default=False, action='store_true')
     args = parser.parse_args()  #args=''
 
     config_dict["zero_optimization"]["stage"] = args.zero
-    config_dict["zero_optimization"]["mics_shard_size"] = args.mics_shard_size
-    config_dict["zero_optimization"]["amsp_o_shard_size"] = args.os
+    config_dict["zero_optimization"]["mics_shard_size"] = args.p_shard_size
+    config_dict["zero_optimization"]["amsp_o_shard_size"] = args.os_shard_size
     config_dict["zero_optimization"]["mics_hierarchical_params_gather"] = args.mics_hierarchical_params_gather
-
-    # print('config_dict["zero_optimization"]', config_dict["zero_optimization"])
     config_path = create_config_from_dict(tmpdir, config_dict)
 
     args.deepspeed_config = config_path
@@ -106,7 +98,7 @@ def print0(msg):
 
 # 2. set deepspeed config
 config_dict = {
-    "train_batch_size": 16,
+    "train_batch_size": 32,
     "steps_per_print": 1,
     "optimizer": {
         "type": "Adam",
@@ -137,14 +129,12 @@ config_dict = {
         "contiguous_gradients": False,
     },
 }
-#        "initial_scale_power": 15
+
 
 deepspeed.init_distributed()
 args = get_args('/tmp/', config_dict)
 hidden_dim = 32
 
-
-# 3. init zero with model
 
 if args.zero ==3 and args.mics_shard_size>0:
     with deepspeed.zero.MiCS_Init(config_dict_or_path=config_dict):
@@ -152,16 +142,8 @@ if args.zero ==3 and args.mics_shard_size>0:
 else:
     model = SimpleModel(model_args)
 
-# model = SimpleModel(model_args)
-# else:
-#     with deepspeed.zero.Init(config_dict_or_path=config_dict):
-
-
-
-print(model)
-# print('------> init model with deepspeed.zero.Init()')
 print(f'Total number of parameters: {model.get_num_params()}')
-# 4. init deepspeed
+
 model, _, _, _ = deepspeed.initialize(args=args,
                                       model=model,
                                       model_parameters=model.parameters(),
@@ -172,11 +154,7 @@ def print_params(tag, model):
         for n, p in model.named_parameters():
             print0("{} {}:{}".format(tag, n, p))
 
-rank = dist.get_rank()
-torch.random.manual_seed(2222 + rank)
-
 data_loader = get_data_loader(model_args['vocab_size'])
-#print_params('pre-train', model
 
 llm_profile = torch.profiler.profile
 llm_profile=DummyProfile
@@ -191,7 +169,7 @@ with llm_profile(
             skip_first=1, wait=1, warmup=1, active=1, repeat=1
         ),
         on_trace_ready=torch.profiler.tensorboard_trace_handler(
-            f"zero1_overlap_bucketsize5e8"
+            f"tmp"
         ),
         with_stack=True,
         with_modules=True,
