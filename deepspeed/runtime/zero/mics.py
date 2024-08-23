@@ -22,9 +22,6 @@ from deepspeed.accelerator import get_accelerator
 from torch import Tensor
 from torch.nn import Parameter
 
-from deepspeed.runtime.zero.amsp_utils import (AMSP_OS_CommGroups,create_amsp_o_comm_groups)
-
-
 def has_hierarchical_all_gather_groups(comm_groups: MiCS_CommGroups):
     result = False
     if comm_groups.param_intra_node_group is not None and comm_groups.param_inter_node_shard_group is not None:
@@ -396,12 +393,6 @@ class MiCS_Optimizer(DeepSpeedZeroOptimizer_Stage3):
                  aio_config=None):
 
         log_dist("Init MiCS optimizer", ranks=[0])
-        # _ds_config=deepspeed.runtime.config.DeepSpeedConfig(ds_config,mpu)
-        # if _ds_config.amsp_o_shard_size > 1:
-        #     self.amsp_o_comm_group = create_amsp_o_comm_groups(
-        #         _ds_config.amsp_o_shard_size,
-        #         dp_process_group,
-        #         mpu=mpu)
 
         first_param = next(module.parameters())        
         # overload the dp_process_group and partition_count
